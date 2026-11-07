@@ -342,8 +342,11 @@
     
     let userGroqKey = localStorage.getItem('kuku_user_groq') || null; 
     let userGeminiKey = localStorage.getItem('kuku_user_gemini') || null;
-   const DEFAULT_GROQ_KEY = "__GROQ_API_KEY__"; 
+    const DEFAULT_GROQ_KEY = "__GROQ_API_KEY__"; 
     
+    // 🔥 NEW: Store the Gmail access token
+    let gmailAccessToken = null;
+
     let notificationsEnabled = true;
     let userMemories = [];
     let isDraggingFile = false;
@@ -389,23 +392,17 @@
     });
     ipcRenderer.on('open-profile', () => { switchView('profile', document.getElementById('user-avatar')); });
 
-    // 🔥 SIGN IN CLICK HANDLER (checks if returning user needs to watch welcome video)
     loginBtn.onclick = async () => {
-      // If we're in the "returning user" flow, show the video before opening Chrome
       if (isWaitingForWelcomeVideo) {
-        // Play the welcome back video
         ipcRenderer.send('play-return-onboarding');
-        // Disable the button visually
         loginBtn.disabled = true;
         signinPromptText.innerHTML = "Please watch the video...";
         return;
       }
       
-      // Check with main.js if this is a returning user who signed out
       const isReturning = await ipcRenderer.invoke('check-returning-user');
       
       if (isReturning) {
-        // Play the welcome back video first
         isWaitingForWelcomeVideo = true;
         loginBtn.disabled = true;
         signinPromptText.innerHTML = "Please watch the video...";
@@ -413,19 +410,18 @@
         return;
       }
       
-      // New user or already shown welcome — open Chrome
       openBrowserLogin();
     };
 
     function openBrowserLogin() {
       const CLIENT_ID = "693668110107-02j3b5rgqam9hutmohm0lplmpi4brqfe.apps.googleusercontent.com"; 
       const redirectUri = encodeURIComponent('http://localhost:3000/login-success');
-      const scope = encodeURIComponent('openid profile email');
+      // 🔥 NEW: Added Gmail Send Scope
+      const scope = encodeURIComponent('openid profile email https://www.googleapis.com/auth/gmail.send');
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}`;
       ipcRenderer.invoke('open-browser-login', authUrl);
     }
 
-    // 🔥 WHEN VIDEO FINISHES
     ipcRenderer.on('welcome-video-finished', () => {
       isWaitingForWelcomeVideo = false;
       loginBtn.disabled = false;
@@ -580,6 +576,9 @@
     let currentUser = null;
 
     ipcRenderer.on('browser-login-token', (event, token) => {
+      // 🔥 NEW: Save the token so we can use it for Gmail
+      gmailAccessToken = token; 
+      
       const credential = firebase.auth.GoogleAuthProvider.credential(null, token);
       auth.signInWithCredential(credential).then((result) => { 
         updateUI(result.user); switchView('home');
@@ -679,20 +678,72 @@
       const activeGroqKey = userGroqKey || DEFAULT_GROQ_KEY;
       const memoryContext = userMemories.length > 0 ? `Here are things you must remember about the user: ${userMemories.join('. ')}.` : '';
 
+      // 🔥 NEW: System prompt instructs AI to use JSON for emails
+      const systemPrompt = `You are KUKU, a helpful AI. ${memoryContext}
+      If the user asks you to send an email, you must reply with ONLY a JSON object in this exact format and nothing else:
+      {"action": "send_email", "to": "email@example.com", "subject": "Subject here", "body": "Message here"}
+      If the user hasn't provided the email address, ask them for it.`;
+
       try {
         const modelsToTry = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"];
         let response; let data; let success = false;
         for (const modelName of modelsToTry) {
           response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST', headers: { 'Authorization': `Bearer ${activeGroqKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: modelName, messages: [{ role: "system", content: `You are KUKU, a helpful AI. ${memoryContext}` }, { role: "user", content: text }], temperature: 0.7 })
+            body: JSON.stringify({ model: modelName, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: text }], temperature: 0.7 })
           });
           data = await response.json(); if (!data.error) { success = true; break; }
         }
         if (!success) throw new Error(data.error ? data.error.message : "All models failed.");
+        
         typing.remove();
-        const aiMsg = document.createElement('div'); aiMsg.className = 'message ai'; aiMsg.innerText = data.choices[0].message.content;
+        let aiResponse = data.choices[0].message.content;
+
+        // 🔥 NEW: Email sending logic
+        try {
+          const cleanJson = aiResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(cleanJson);
+          
+          if (parsed.action === 'send_email') {
+            if (!gmailAccessToken) {
+               aiResponse = "⚠️ You need to sign in with Google again to grant email permissions.";
+            } else {
+              const aiMsg = document.createElement('div'); aiMsg.className = 'message ai'; aiMsg.innerText = `✉️ Sending email to ${parsed.to}...`;
+              chatContainer.appendChild(aiMsg); chatContainer.scrollTop = chatContainer.scrollHeight;
+
+              const emailContent = [
+                  `To: ${parsed.to}`,
+                  `Subject: ${parsed.subject}`,
+                  `Content-Type: text/plain; charset="UTF-8"`,
+                  ``,
+                  parsed.body
+              ].join('\r\n');
+
+              const encodedEmail = btoa(unescape(encodeURIComponent(emailContent)))
+                  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+              const emailRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${gmailAccessToken}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ raw: encodedEmail })
+              });
+
+              if (emailRes.ok) {
+                  aiMsg.innerText = `✅ Email successfully sent to ${parsed.to}!`;
+              } else {
+                  aiMsg.innerText = `❌ Failed to send email. Make sure you granted Gmail permissions.`;
+              }
+              playPopSound();
+              return; // Stop here so we don't print the raw JSON
+            }
+          }
+        } catch (e) {
+          // Not email JSON, proceed normally
+        }
+
+        const aiMsg = document.createElement('div'); aiMsg.className = 'message ai'; aiMsg.innerText = aiResponse;
         chatContainer.appendChild(aiMsg); chatContainer.scrollTop = chatContainer.scrollHeight; playPopSound();
+
       } catch (error) {
         typing.remove();
         const aiMsg = document.createElement('div'); aiMsg.className = 'message ai'; aiMsg.innerText = "Error: " + error.message;

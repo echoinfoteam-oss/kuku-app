@@ -264,7 +264,6 @@ function createFileDropVideoWindow() {
 app.whenReady().then(() => {
   createMainWindow();
   
-  // 🔥 Start auto-updater (only in production build)
   if (app.isPackaged) {
     setupAutoUpdater();
   }
