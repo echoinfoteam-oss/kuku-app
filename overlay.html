@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; overflow: hidden; cursor: crosshair; background: rgba(0,0,0,0.4); }
+    #selection {
+      border: 3px solid #1DB954;
+      background: rgba(29, 185, 84, 0.15);
+      position: absolute;
+      display: none;
+      box-shadow: 0 0 30px #1DB954, inset 0 0 20px rgba(29,185,84,0.5);
+      border-radius: 8px;
+    }
+    #instructions {
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+      color: white; font-family: sans-serif; font-size: 20px; font-weight: bold;
+      background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 10px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="instructions">Drag to highlight what you want KUKU to explain</div>
+  <div id="selection"></div>
+  <script>
+    const { desktopCapturer, ipcRenderer } = require('electron');
+    let startX, startY, isDrawing = false;
+    const selBox = document.getElementById('selection');
+    const instructions = document.getElementById('instructions');
+
+    document.addEventListener('mousedown', (e) => {
+      isDrawing = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      selBox.style.left = startX + 'px';
+      selBox.style.top = startY + 'px';
+      selBox.style.width = '0px';
+      selBox.style.height = '0px';
+      selBox.style.display = 'block';
+      instructions.style.display = 'none';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDrawing) return;
+      const currentX = e.clientX;
+      const currentY = e.clientY;
+      
+      const width = Math.abs(currentX - startX);
+      const height = Math.abs(currentY - startY);
+      const left = Math.min(currentX, startX);
+      const top = Math.min(currentY, startY);
+
+      selBox.style.left = left + 'px';
+      selBox.style.top = top + 'px';
+      selBox.style.width = width + 'px';
+      selBox.style.height = height + 'px';
+    });
+
+    document.addEventListener('mouseup', async (e) => {
+      if (!isDrawing) return;
+      isDrawing = false;
+      
+      const rect = selBox.getBoundingClientRect();
+      
+      // Get the screen image
+      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: window.screen.width, height: window.screen.height } });
+      const primaryScreen = sources[0];
+      
+      // Crop the image to the drawn box
+      const image = primaryScreen.thumbnail.crop({
+        x: Math.floor(rect.left * (primaryScreen.thumbnail.getSize().width / window.screen.width)),
+        y: Math.floor(rect.top * (primaryScreen.thumbnail.getSize().height / window.screen.height)),
+        width: Math.floor(rect.width * (primaryScreen.thumbnail.getSize().width / window.screen.width)),
+        height: Math.floor(rect.height * (primaryScreen.thumbnail.getSize().height / window.screen.height))
+      });
+
+      ipcRenderer.send('image-captured', image.toDataURL());
+    });
+  </script>
+</body>
+</html>
