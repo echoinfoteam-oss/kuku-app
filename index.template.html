@@ -344,7 +344,7 @@
     let userGeminiKey = localStorage.getItem('kuku_user_gemini') || null;
     const DEFAULT_GROQ_KEY = "__GROQ_API_KEY__"; 
     
-    // 🔥 NEW: Store the Gmail access token
+    // Store the Google access token (used for both Gmail and Calendar)
     let gmailAccessToken = null;
 
     let notificationsEnabled = true;
@@ -416,8 +416,8 @@
     function openBrowserLogin() {
       const CLIENT_ID = "693668110107-02j3b5rgqam9hutmohm0lplmpi4brqfe.apps.googleusercontent.com"; 
       const redirectUri = encodeURIComponent('http://localhost:3000/login-success');
-      // 🔥 NEW: Added Gmail Send Scope
-      const scope = encodeURIComponent('openid profile email https://www.googleapis.com/auth/gmail.send');
+      // 🔥 Added Gmail Send Scope and Calendar Events Scope
+      const scope = encodeURIComponent('openid profile email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events');
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}`;
       ipcRenderer.invoke('open-browser-login', authUrl);
     }
@@ -576,7 +576,6 @@
     let currentUser = null;
 
     ipcRenderer.on('browser-login-token', (event, token) => {
-      // 🔥 NEW: Save the token so we can use it for Gmail
       gmailAccessToken = token; 
       
       const credential = firebase.auth.GoogleAuthProvider.credential(null, token);
@@ -678,11 +677,16 @@
       const activeGroqKey = userGroqKey || DEFAULT_GROQ_KEY;
       const memoryContext = userMemories.length > 0 ? `Here are things you must remember about the user: ${userMemories.join('. ')}.` : '';
 
-      // 🔥 NEW: System prompt instructs AI to use JSON for emails
+      // 🔥 UPDATED: System prompt instructs AI to use JSON for emails AND calendar events
       const systemPrompt = `You are KUKU, a helpful AI. ${memoryContext}
-      If the user asks you to send an email, you must reply with ONLY a JSON object in this exact format and nothing else:
+      If the user asks to send an email, reply with ONLY a JSON object:
       {"action": "send_email", "to": "email@example.com", "subject": "Subject here", "body": "Message here"}
-      If the user hasn't provided the email address, ask them for it.`;
+
+      If the user asks to schedule an event/meeting, reply with ONLY a JSON object:
+      {"action": "create_event", "summary": "Meeting Title", "startTime": "2026-11-10T14:00:00", "endTime": "2026-11-10T15:00:00", "description": "Details here"}
+      (Always assume the user is in UTC time for startTime and endTime if they don't specify. Format strictly as YYYY-MM-DDTHH:MM:SS)
+
+      If the user hasn't provided enough information (like a date or email), ask them for it.`;
 
       try {
         const modelsToTry = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"];
@@ -699,11 +703,11 @@
         typing.remove();
         let aiResponse = data.choices[0].message.content;
 
-        // 🔥 NEW: Email sending logic
         try {
           const cleanJson = aiResponse.replace(/```json/g, '').replace(/```/g, '').trim();
           const parsed = JSON.parse(cleanJson);
           
+          // 🔥 EMAIL LOGIC
           if (parsed.action === 'send_email') {
             if (!gmailAccessToken) {
                aiResponse = "⚠️ You need to sign in with Google again to grant email permissions.";
@@ -737,8 +741,42 @@
               return; // Stop here so we don't print the raw JSON
             }
           }
+
+          // 🔥 CALENDAR LOGIC
+          if (parsed.action === 'create_event') {
+            if (!gmailAccessToken) {
+               aiResponse = "⚠️ You need to sign in with Google again to grant Calendar permissions.";
+            } else {
+              const aiMsg = document.createElement('div'); aiMsg.className = 'message ai'; aiMsg.innerText = `📅 Scheduling "${parsed.summary}" for ${parsed.startTime}...`;
+              chatContainer.appendChild(aiMsg); chatContainer.scrollTop = chatContainer.scrollHeight;
+
+              // Google Calendar API requires timezones. We'll default to UTC.
+              const eventData = {
+                summary: parsed.summary,
+                description: parsed.description || "",
+                start: { dateTime: parsed.startTime + "Z", timeZone: "UTC" },
+                end: { dateTime: parsed.endTime + "Z", timeZone: "UTC" }
+              };
+
+              const calRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${gmailAccessToken}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify(eventData)
+              });
+
+              if (calRes.ok) {
+                  const calData = await calRes.json();
+                  aiMsg.innerText = `✅ Event successfully scheduled!\n🔗 ${calData.htmlLink}`;
+              } else {
+                  aiMsg.innerText = `❌ Failed to schedule event. Make sure you granted Calendar permissions.`;
+              }
+              playPopSound();
+              return; // Stop here so we don't print the raw JSON
+            }
+          }
+
         } catch (e) {
-          // Not email JSON, proceed normally
+          // Not JSON (or invalid JSON), proceed normally
         }
 
         const aiMsg = document.createElement('div'); aiMsg.className = 'message ai'; aiMsg.innerText = aiResponse;
