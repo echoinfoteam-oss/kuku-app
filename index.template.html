@@ -189,7 +189,6 @@
     @keyframes ringImplode { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(0); opacity: 0; } }
     @keyframes textFadeUp { to { opacity: 0; transform: translateY(-15px); } }
 
-    /* 🔥 NEW: Doc Chat Styles */
     #doc-context-pill {
       display: none; align-items: center; justify-content: space-between;
       background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.4);
@@ -275,7 +274,7 @@
       </div>
 
       <div class="view" id="view-ai">
-        <!-- 🔥 NEW: Document context pill -->
+        <!-- Document context pill -->
         <div id="doc-context-pill">
           <span id="doc-context-name">📄 Attached</span>
           <button onclick="clearDocContext()">✕</button>
@@ -361,10 +360,12 @@
     const DEFAULT_GROQ_KEY = "__GROQ_API_KEY__"; 
     
     let gmailAccessToken = null;
-
-    // 🔥 NEW: Variables for Doc Chat
     let activeDocContext = null;
     let activeDocName = null;
+
+    // 🔥 Paywall Variables
+    let emailCount = parseInt(localStorage.getItem('kuku_email_count') || '0');
+    let isPro = localStorage.getItem('kuku_is_pro') === 'true';
 
     let notificationsEnabled = true;
     let userMemories = [];
@@ -410,6 +411,13 @@
       setTimeout(() => { document.getElementById('chat-input').focus(); }, 500); 
     });
     ipcRenderer.on('open-profile', () => { switchView('profile', document.getElementById('user-avatar')); });
+
+    // 🔥 Listen for Pro Unlock
+    ipcRenderer.on('pro-unlocked', () => {
+      isPro = true;
+      localStorage.setItem('kuku_is_pro', 'true');
+      alert("🎉 Pro Unlocked! You now have unlimited email access.");
+    });
 
     loginBtn.onclick = async () => {
       if (isWaitingForWelcomeVideo) {
@@ -680,7 +688,6 @@
       }
     });
 
-    // 🔥 NEW: Clear document context
     function clearDocContext() {
       activeDocContext = null;
       activeDocName = null;
@@ -703,7 +710,6 @@
       const activeGroqKey = userGroqKey || DEFAULT_GROQ_KEY;
       const memoryContext = userMemories.length > 0 ? `Here are things you must remember about the user: ${userMemories.join('. ')}.` : '';
 
-      // 🔥 NEW: Append Doc Context to the system prompt
       let docContextPrompt = "";
       if (activeDocContext) {
         docContextPrompt = `\n\nIMPORTANT: The user has attached a document named "${activeDocName}". Use this document text to answer their questions:\n--- DOCUMENT START ---\n${activeDocContext}\n--- DOCUMENT END ---`;
@@ -738,7 +744,24 @@
           const cleanJson = aiResponse.replace(/```json/g, '').replace(/```/g, '').trim();
           const parsed = JSON.parse(cleanJson);
           
+          // 🔥 CHECK PAYWALL
           if (parsed.action === 'send_email') {
+            if (!isPro && emailCount >= 10) {
+              const limitMsg = document.createElement('div'); 
+              limitMsg.className = 'message ai'; 
+              limitMsg.innerText = "⚠️ You have reached your 10 free email limit. Please watch the video to upgrade.";
+              chatContainer.appendChild(limitMsg); chatContainer.scrollTop = chatContainer.scrollHeight;
+              
+              island.classList.remove('expanded');
+              ipcRenderer.send('play-upsell-video'); 
+              
+              setTimeout(() => {
+                ipcRenderer.send('open-pricing-window');
+              }, 5000); // Adjust 5000 to match your video length in milliseconds!
+
+              return; 
+            } 
+            
             if (!gmailAccessToken) {
                aiResponse = "⚠️ You need to sign in with Google again to grant email permissions.";
             } else {
@@ -763,7 +786,11 @@
               });
 
               if (emailRes.ok) {
-                  aiMsg.innerText = `✅ Email successfully sent to ${parsed.to}!`;
+                  if (!isPro) {
+                    emailCount++;
+                    localStorage.setItem('kuku_email_count', emailCount);
+                  }
+                  aiMsg.innerText = `✅ Email successfully sent to ${parsed.to}! ${isPro ? '(Pro)' : '(' + (10 - emailCount) + ' free emails left)'}`;
               } else {
                   aiMsg.innerText = `❌ Failed to send email. Make sure you granted Gmail permissions.`;
               }
@@ -804,7 +831,7 @@
           }
 
         } catch (e) {
-          // Not JSON (or invalid JSON), proceed normally
+          // Not JSON, proceed normally
         }
 
         const aiMsg = document.createElement('div'); aiMsg.className = 'message ai'; aiMsg.innerText = aiResponse;
@@ -820,7 +847,6 @@
     async function loadMemories() { userMemories = await ipcRenderer.invoke('get-memories'); }
     loadMemories();
 
-    // 🔥 NEW: Update ProcessDroppedFile to attach context instead of sending instantly
     async function processDroppedFile(file) {
       const result = await ipcRenderer.invoke('read-file', file.path);
       
@@ -828,15 +854,12 @@
       switchView('ai', btnAI);
       
       if (result.type === 'text') {
-        // Attach to Doc Chat context
         activeDocContext = result.content;
         activeDocName = result.name;
         
-        // Show UI pill
         document.getElementById('doc-context-name').innerText = `📄 Attached: ${result.name}`;
         document.getElementById('doc-context-pill').style.display = 'flex';
         
-        // Pre-fill chat input with a helpful prompt
         document.getElementById('chat-input').value = `I've attached "${result.name}". What would you like to know about it?`;
         document.getElementById('chat-input').focus();
         

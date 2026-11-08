@@ -12,6 +12,7 @@ const port = 3000;
 let mainWindow;
 let onboardingWindow;
 let filedropWindow;
+let pricingWindow = null; // 🔥 NEW
 let lastClipboardText = '';
 let lastActiveApp = '';
 
@@ -198,6 +199,30 @@ function createOnboardingWindow(videoData) {
   });
 }
 
+// 🔥 NEW: PRICING WINDOW
+function createPricingWindow() {
+  if (pricingWindow) {
+    pricingWindow.focus();
+    return;
+  }
+  
+  const mainBounds = mainWindow.getBounds();
+  
+  pricingWindow = new BrowserWindow({
+    width: 320, height: 420, 
+    x: mainBounds.x + mainBounds.width + 10, // Opens to the right of the island
+    y: mainBounds.y + 20,
+    frame: false, transparent: true, alwaysOnTop: true, resizable: false, hasShadow: false,
+    webPreferences: { nodeIntegration: true, contextIsolation: false }
+  });
+
+  pricingWindow.loadFile('pricing.html');
+  
+  pricingWindow.on('closed', () => {
+    pricingWindow = null;
+  });
+}
+
 function createFileDropVideoWindow() {
   if (isFileDropVideoPlaying) return;
   isFileDropVideoPlaying = true;
@@ -230,12 +255,10 @@ function createFileDropVideoWindow() {
   filedropWindow.loadFile('filedrop-video.html');
 
   filedropWindow.webContents.on('did-finish-load', () => {
-    console.log('📄 filedrop-video.html loaded');
     filedropWindow.webContents.send('play-filedrop-video');
   });
 
   filedropWindow.webContents.on('did-fail-load', () => {
-    console.log('⚠️ File drop video failed to load');
     if (filedropWindow) filedropWindow.close();
     filedropWindow = null;
     isFileDropVideoPlaying = false;
@@ -244,7 +267,6 @@ function createFileDropVideoWindow() {
 
   clearTimeout(fileDropSafetyTimeout);
   fileDropSafetyTimeout = setTimeout(() => {
-    console.log('⚠️ File drop video 60s timeout');
     if (filedropWindow) filedropWindow.close();
     filedropWindow = null;
     isFileDropVideoPlaying = false;
@@ -319,8 +341,6 @@ ipcMain.on('video-finished', () => {
 });
 
 ipcMain.handle('check-and-play-filedrop-video', async () => {
-  console.log('🔍 check-and-play-filedrop-video: flag exists?', fs.existsSync(fileDropFlagFile));
-  
   if (!fs.existsSync(fileDropFlagFile)) {
     createFileDropVideoWindow();
     return true;
@@ -329,7 +349,6 @@ ipcMain.handle('check-and-play-filedrop-video', async () => {
 });
 
 ipcMain.on('filedrop-video-finished', () => {
-  console.log('✅ filedrop-video-finished received');
   clearTimeout(fileDropSafetyTimeout);
   try { fs.writeFileSync(fileDropFlagFile, 'true'); } catch(e) {}
   if (filedropWindow) filedropWindow.close();
@@ -350,13 +369,31 @@ ipcMain.on('user-logged-in', () => {
 ipcMain.on('user-logged-out', () => { 
   if (fs.existsSync(authFlagFile)) fs.unlinkSync(authFlagFile);
   deleteFileDropFlag();
-  console.log('✅ Signed out — file drop flag cleared');
 });
 
 ipcMain.on('replay-onboarding', () => {
   if (mainWindow) mainWindow.hide();
   currentVideoIndex = 0;
   createOnboardingWindow(videos[currentVideoIndex]);
+});
+
+// 🔥 NEW: IPC Listeners for Paywall & Pricing
+ipcMain.on('open-pricing-window', () => {
+  createPricingWindow();
+});
+
+ipcMain.on('close-pricing-window', () => {
+  if (pricingWindow) pricingWindow.close();
+});
+
+ipcMain.on('unlock-pro', () => {
+  fs.writeFileSync(path.join(app.getPath('userData'), 'kuku_pro.flag'), 'true');
+  if (mainWindow) mainWindow.webContents.send('pro-unlocked');
+  if (pricingWindow) pricingWindow.close();
+});
+
+ipcMain.handle('check-pro-status', () => {
+  return fs.existsSync(path.join(app.getPath('userData'), 'kuku_pro.flag'));
 });
 
 ipcMain.handle('capture-screen', async () => {
@@ -373,10 +410,6 @@ ipcMain.handle('read-file', async (event, filePath) => {
       const dataBuffer = fs.readFileSync(filePath);
       const data = await pdfParse(dataBuffer);
       return { type: 'text', name: fileName, content: data.text.substring(0, 5000) };
-    }
-    
-    if (ext === '.docx' || ext === '.doc') {
-      return { type: 'error', name: fileName, content: 'Word documents are not supported yet. Please save as PDF or TXT.' };
     }
     
     if (['.txt', '.md', '.js', '.py', '.html', '.css', '.json', '.csv'].includes(ext)) {

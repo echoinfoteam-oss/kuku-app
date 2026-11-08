@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { margin: 0; padding: 10px; background: transparent; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; user-select: none; }
+    
+    #pricing-card {
+      background: rgba(15, 15, 15, 0.95); border: 1px solid rgba(255, 255, 255, 0.1);
+      width: 300px; border-radius: 24px; padding: 20px; box-sizing: border-box;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05) inset;
+      backdrop-filter: blur(25px); color: white;
+      animation: slideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    @keyframes slideIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+
+    .header { text-align: center; margin-bottom: 15px; }
+    .header h2 { margin: 0; font-size: 18px; color: #1DB954; }
+    .header p { margin: 5px 0 0 0; font-size: 11px; color: #aaa; }
+
+    .plan { 
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); 
+      border-radius: 16px; padding: 15px; margin-bottom: 12px; cursor: pointer; transition: 0.2s;
+    }
+    .plan:hover { background: rgba(29, 185, 84, 0.1); border-color: rgba(29, 185, 84, 0.3); }
+    .plan.org:hover { background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.3); }
+
+    .plan-title { font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+    .plan-price { font-size: 16px; font-weight: bold; color: #1DB954; }
+    .org .plan-price { color: #a855f7; }
+    .plan-desc { font-size: 10px; color: #888; margin-top: 4px; }
+
+    .btn-unlock { 
+      background: white; color: black; border: none; padding: 10px; width: 100%; 
+      border-radius: 12px; font-weight: bold; font-size: 12px; cursor: pointer; margin-top: 5px; transition: 0.2s;
+    }
+    .btn-unlock:hover { transform: scale(1.02); }
+    
+    .btn-cancel { 
+      background: transparent; color: #888; border: none; width: 100%; 
+      font-size: 11px; cursor: pointer; margin-top: 10px; padding: 5px;
+    }
+    .btn-cancel:hover { color: white; }
+
+    .input-group { display: flex; gap: 5px; margin-top: 10px; }
+    .input-group input { flex: 1; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 8px; color: white; font-size: 11px; outline: none; }
+    .input-group button { background: #1DB954; color: black; border: none; padding: 0 12px; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="pricing-card">
+    <div class="header">
+      <h2>🚀 Unlock Unlimited AI</h2>
+      <p>You've reached your limit of 10 free emails.</p>
+    </div>
+
+    <!-- Student Plan -->
+    <div class="plan" onclick="openSelar('https://selar.com/915945a514')">
+      <div class="plan-title"><span>Student Plan</span><span class="plan-price">$5 / ₦1000</span></div>
+      <div class="plan-desc">Unlimited Gmail, Calendar, and Doc Chat.</div>
+    </div>
+
+    <!-- Org Plan -->
+    <div class="plan org" onclick="openSelar('https://selar.com/3x44444668')">
+      <div class="plan-title"><span>Organization Plan</span><span class="plan-price">$15 / ₦15000</span></div>
+      <div class="plan-desc">Everything in Student + Priority support.</div>
+    </div>
+
+    <div style="text-align: center; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;">
+      <div style="font-size: 10px; color: #aaa; margin-bottom: 5px;">Already paid? Paste your License Key:</div>
+      <div class="input-group">
+        <input type="text" id="license-key" placeholder="KUKU-XXXX-XXXX" />
+        <button onclick="verifyKey()">Verify</button>
+      </div>
+    </div>
+
+    <button class="btn-cancel" onclick="closeWindow()">Maybe Later</button>
+  </div>
+
+  <script>
+    const { ipcRenderer, shell } = require('electron');
+
+    function openSelar(link) {
+      shell.openExternal(link);
+    }
+
+    function closeWindow() {
+      ipcRenderer.send('close-pricing-window');
+    }
+
+    function verifyKey() {
+      const key = document.getElementById('license-key').value.trim().toUpperCase();
+      
+      // 🔥 The secret keys you set up on Selar
+      if (key === 'KUKU-STUDENT-PRO' || key === 'KUKU-ORG-PRO') {
+        ipcRenderer.send('unlock-pro');
+      } else {
+        alert("Invalid License Key. Please check your Selar receipt email.");
+      }
+    }
+  </script>
+</body>
+</html>
