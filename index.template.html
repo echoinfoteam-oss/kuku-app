@@ -188,6 +188,16 @@
     @keyframes coreImplode { 0% { transform: scale(1.15); } 60% { transform: scale(1.8); box-shadow: 0 0 200px rgba(255, 255, 255, 0.8); } 100% { transform: scale(0); opacity: 0; } }
     @keyframes ringImplode { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(0); opacity: 0; } }
     @keyframes textFadeUp { to { opacity: 0; transform: translateY(-15px); } }
+
+    /* 🔥 NEW: Doc Chat Styles */
+    #doc-context-pill {
+      display: none; align-items: center; justify-content: space-between;
+      background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.4);
+      padding: 6px 10px; border-radius: 8px; margin-bottom: 5px; font-size: 11px; color: #e0e0e0;
+      animation: slideUp 0.3s ease;
+    }
+    #doc-context-pill span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 85%; }
+    #doc-context-pill button { background: transparent; border: none; color: #ff4d4d; cursor: pointer; font-weight: bold; font-size: 12px; padding: 0 4px; }
   </style>
 </head>
 <body>
@@ -265,6 +275,12 @@
       </div>
 
       <div class="view" id="view-ai">
+        <!-- 🔥 NEW: Document context pill -->
+        <div id="doc-context-pill">
+          <span id="doc-context-name">📄 Attached</span>
+          <button onclick="clearDocContext()">✕</button>
+        </div>
+
         <div class="chat-container" id="chat-container">
           <div class="message ai">Hello! I am KUKU. How can I help you today?</div>
         </div>
@@ -344,8 +360,11 @@
     let userGeminiKey = localStorage.getItem('kuku_user_gemini') || null;
     const DEFAULT_GROQ_KEY = "__GROQ_API_KEY__"; 
     
-    // Store the Google access token (used for both Gmail and Calendar)
     let gmailAccessToken = null;
+
+    // 🔥 NEW: Variables for Doc Chat
+    let activeDocContext = null;
+    let activeDocName = null;
 
     let notificationsEnabled = true;
     let userMemories = [];
@@ -416,7 +435,6 @@
     function openBrowserLogin() {
       const CLIENT_ID = "693668110107-02j3b5rgqam9hutmohm0lplmpi4brqfe.apps.googleusercontent.com"; 
       const redirectUri = encodeURIComponent('http://localhost:3000/login-success');
-      // 🔥 Added Gmail Send Scope and Calendar Events Scope
       const scope = encodeURIComponent('openid profile email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events');
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}`;
       ipcRenderer.invoke('open-browser-login', authUrl);
@@ -662,6 +680,14 @@
       }
     });
 
+    // 🔥 NEW: Clear document context
+    function clearDocContext() {
+      activeDocContext = null;
+      activeDocName = null;
+      document.getElementById('doc-context-pill').style.display = 'none';
+      playPopSound();
+    }
+
     async function sendMessage() {
       const input = document.getElementById('chat-input'); const text = input.value.trim(); if (!text) return;
       if (btnAI.classList.contains('disabled')) return;
@@ -677,8 +703,13 @@
       const activeGroqKey = userGroqKey || DEFAULT_GROQ_KEY;
       const memoryContext = userMemories.length > 0 ? `Here are things you must remember about the user: ${userMemories.join('. ')}.` : '';
 
-      // 🔥 UPDATED: System prompt instructs AI to use JSON for emails AND calendar events
-      const systemPrompt = `You are KUKU, a helpful AI. ${memoryContext}
+      // 🔥 NEW: Append Doc Context to the system prompt
+      let docContextPrompt = "";
+      if (activeDocContext) {
+        docContextPrompt = `\n\nIMPORTANT: The user has attached a document named "${activeDocName}". Use this document text to answer their questions:\n--- DOCUMENT START ---\n${activeDocContext}\n--- DOCUMENT END ---`;
+      }
+
+      const systemPrompt = `You are KUKU, a helpful AI. ${memoryContext}${docContextPrompt}
       If the user asks to send an email, reply with ONLY a JSON object:
       {"action": "send_email", "to": "email@example.com", "subject": "Subject here", "body": "Message here"}
 
@@ -707,7 +738,6 @@
           const cleanJson = aiResponse.replace(/```json/g, '').replace(/```/g, '').trim();
           const parsed = JSON.parse(cleanJson);
           
-          // 🔥 EMAIL LOGIC
           if (parsed.action === 'send_email') {
             if (!gmailAccessToken) {
                aiResponse = "⚠️ You need to sign in with Google again to grant email permissions.";
@@ -738,11 +768,10 @@
                   aiMsg.innerText = `❌ Failed to send email. Make sure you granted Gmail permissions.`;
               }
               playPopSound();
-              return; // Stop here so we don't print the raw JSON
+              return; 
             }
           }
 
-          // 🔥 CALENDAR LOGIC
           if (parsed.action === 'create_event') {
             if (!gmailAccessToken) {
                aiResponse = "⚠️ You need to sign in with Google again to grant Calendar permissions.";
@@ -750,7 +779,6 @@
               const aiMsg = document.createElement('div'); aiMsg.className = 'message ai'; aiMsg.innerText = `📅 Scheduling "${parsed.summary}" for ${parsed.startTime}...`;
               chatContainer.appendChild(aiMsg); chatContainer.scrollTop = chatContainer.scrollHeight;
 
-              // Google Calendar API requires timezones. We'll default to UTC.
               const eventData = {
                 summary: parsed.summary,
                 description: parsed.description || "",
@@ -771,7 +799,7 @@
                   aiMsg.innerText = `❌ Failed to schedule event. Make sure you granted Calendar permissions.`;
               }
               playPopSound();
-              return; // Stop here so we don't print the raw JSON
+              return; 
             }
           }
 
@@ -792,6 +820,7 @@
     async function loadMemories() { userMemories = await ipcRenderer.invoke('get-memories'); }
     loadMemories();
 
+    // 🔥 NEW: Update ProcessDroppedFile to attach context instead of sending instantly
     async function processDroppedFile(file) {
       const result = await ipcRenderer.invoke('read-file', file.path);
       
@@ -799,8 +828,19 @@
       switchView('ai', btnAI);
       
       if (result.type === 'text') {
-        document.getElementById('chat-input').value = `Here's a file called "${result.name}". Please summarize what's in it:\n\n${result.content}`;
-        sendMessage();
+        // Attach to Doc Chat context
+        activeDocContext = result.content;
+        activeDocName = result.name;
+        
+        // Show UI pill
+        document.getElementById('doc-context-name').innerText = `📄 Attached: ${result.name}`;
+        document.getElementById('doc-context-pill').style.display = 'flex';
+        
+        // Pre-fill chat input with a helpful prompt
+        document.getElementById('chat-input').value = `I've attached "${result.name}". What would you like to know about it?`;
+        document.getElementById('chat-input').focus();
+        
+        playPopSound();
       } else if (result.type === 'image') {
         await sendImageToAI(result.content, `📸 Image: ${result.name} - describe this image.`);
       } else {
